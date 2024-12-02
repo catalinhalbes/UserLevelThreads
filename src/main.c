@@ -19,8 +19,6 @@ void* print_char(void* arg) {
 
     int err = 0;
 
-
-
     err = ult_mutex_lock(targ.mut);
     printf("[%lu] mutex %lu locked, err: %d\n", ult_get_id(), targ.mut->id, err);
 
@@ -47,8 +45,8 @@ void* print_char(void* arg) {
 }
 
 int main() {
-    ult_mutex_t mutexes[2];
-    ult_t threads[4];
+    ult_mutex_t* mutexes = (ult_mutex_t*) malloc(sizeof(ult_mutex_t) * 2);
+    ult_t* threads = (ult_t*) malloc(sizeof(ult_t) * 4);
 
     for (int i = 0; i < 2; i++) {
         ult_mutex_init(&mutexes[i]);
@@ -71,6 +69,9 @@ int main() {
         int err = ult_mutex_destroy(&mutexes[i]);
         printf("[%lu] mutex destroyed, err: %d\n", ult_get_id(), err);
     }
+
+    free(mutexes);
+    free(threads);
 
     return 0;
 }

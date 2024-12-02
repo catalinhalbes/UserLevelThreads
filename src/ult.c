@@ -8,6 +8,8 @@
 #include <time.h>
 #include <sys/types.h>
 
+#include <valgrind/valgrind.h>
+
 #include "ult.h"
 #include "linked_list.h"
 
@@ -23,6 +25,8 @@
 static ucontext_t scheduler_context;
 static char scheduler_stack[DEFAULT_ULT_STACK_SIZE]; // only accessed by the scheduler context, volatile probably not needed
 
+static ult_t main_ult;
+
 static ult_linked_list_t running_ult_list;
 static volatile uint64_t ult_counter = 0;
 static volatile uint64_t mutex_counter = 0;
@@ -32,7 +36,7 @@ static volatile uint8_t should_change_thread = 0;
 
 void sig_handler(int signum) {
     // See SIGVTALRM (virtual time, none passes while the process is paused)
-    // NOTE: printf shoud not be called inside a signal handler as it is not signal safe
+    // NOTE: // printf shoud not be called inside a signal handler as it is not signal safe
 
     switch (signum) {
         case SIGUSR1:
@@ -40,7 +44,7 @@ void sig_handler(int signum) {
             break;
 
         case SIGUSR2:
-            printf("SIGUSR2\n");
+            // printf("SIGUSR2\n");
             break;
     }
 }
@@ -78,6 +82,8 @@ static inline void init_ult_context(ult_t* ult, ucontext_t* link) {
     if (getcontext(&(ult->context)) != 0)
         BAIL("Get Context");
 
+    VALGRIND_STACK_REGISTER(ult->stack, ult->stack + DEFAULT_ULT_STACK_SIZE);
+
     ult->context.uc_stack.ss_sp = ult->stack;
     ult->context.uc_stack.ss_size = sizeof(ult->stack);
     ult->context.uc_link = link;
@@ -86,9 +92,9 @@ static inline void init_ult_context(ult_t* ult, ucontext_t* link) {
 void wrapper() {
     ult_t* current = running_ult_list.head->ult;
 
-    printf("[%lu] wrapper enter\n", current->id); fflush(NULL);
+    // printf("[%lu] wrapper enter\n", current->id); fflush(NULL);
     current->result = current->start_routine(current->arg);
-    printf("[%lu] routine finished\n", current->id); fflush(NULL);
+    // printf("[%lu] routine finished\n", current->id); fflush(NULL);
 
     unset_signals();
 
@@ -99,12 +105,12 @@ void wrapper() {
         // the memory is freed after join
 
         if (current->waiting_join != NULL) {
-            printf("[%lu] wrapper, change status of (%lu) to RUNNING\n", current->id, current->waiting_join->id); fflush(NULL);
+            // printf("[%lu] wrapper, change status of (%lu) to RUNNING\n", current->id, current->waiting_join->id); fflush(NULL);
             current->waiting_join->status = RUNNING; // wake the thread waiting to join the current thread, without changing the run order
             insert_ult_last(&running_ult_list, current->waiting_join);
         }
 
-        printf("[%lu] wrapper exit\n", current->id); fflush(NULL);
+        // printf("[%lu] wrapper exit\n", current->id); fflush(NULL);
 
     set_signals();
 
@@ -112,7 +118,7 @@ void wrapper() {
 }
 
 void scheduler_worker() {
-    printf("[scheduler] scheduler started\n");
+    // printf("[scheduler] scheduler started\n");
 
     while (1) {
             // check if we should change the execution to another thread
@@ -139,11 +145,10 @@ static void init_main() {
     uint64_t id = 1;
     ult_counter = 1;
 
-    ult_t* main_ult = (ult_t*) malloc(sizeof(ult_t));
-    init_ult(main_ult, id, NULL, NULL);
-    init_ult_context(main_ult, &scheduler_context); // when main is done return to scheduler to make sure no other threads were left behind and perform final cleanup
+    init_ult(&main_ult, id, NULL, NULL);
+    init_ult_context(&main_ult, NULL); // when main is done the entire program is done, no cleanup will be done after
 
-    insert_ult_last(&running_ult_list, main_ult);
+    insert_ult_last(&running_ult_list, &main_ult);
 }
 
 static void init_scheduler() {
@@ -183,12 +188,12 @@ static void init_timer() {
 
 static inline void init_lib() {
     if (ult_counter == 0) {
-        printf("Initializing library\n");
+        // printf("Initializing library\n");
 
         init_ult_linked_list(&running_ult_list);
 
         // this is the first call to the library
-        set_signals();
+        unset_signals();
         init_scheduler();
         init_timer();
         init_main(); // we initialize main after initializing all other lib parts to make sure that we don't execute the code twice
@@ -201,7 +206,7 @@ int ult_create(ult_t* thread, voidptr_arg_voidptr_ret_func start_routine, void* 
     init_lib();
 
     ult_t* running = running_ult_list.head->ult;
-    printf("[%lu] create: %lu\n", running->id, ult_counter + 1); fflush(NULL);
+    // printf("[%lu] create: %lu\n", running->id, ult_counter + 1); fflush(NULL);
 
     unset_signals(); // protect this area from being interrupted
         ult_counter += 1;
@@ -229,22 +234,22 @@ int ult_join(ult_t* thread, void** retval) {
 
         ult_t* current_waiting_join = running_ult_list.head->ult;
 
-        printf("[%lu] waiting to join: %lu\n", current_waiting_join->id, thread->id); fflush(NULL);
+        // printf("[%lu] waiting to join: %lu\n", current_waiting_join->id, thread->id); fflush(NULL);
 
         if (thread->waiting_join != NULL) {
             // the thread is already being waited by some other thread
-            printf("[%lu] %lu was already waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
+            // printf("[%lu] %lu was already waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
 
             set_signals();
             return 2;
         }
 
         if (thread->status != FINISHED) {
-            printf("[%lu] %lu did not finish yet\n", current_waiting_join->id, thread->id); fflush(NULL);
+            // printf("[%lu] %lu did not finish yet\n", current_waiting_join->id, thread->id); fflush(NULL);
 
             if (thread->waiting_join != NULL) {
                 // the thread is already being waited by some other thread
-                printf("[%lu] %lu is being waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
+                // printf("[%lu] %lu is being waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
 
                 set_signals();
                 return 2;
@@ -259,6 +264,8 @@ int ult_join(ult_t* thread, void** retval) {
 
         // current thread is now running after the finish of the to-be-joined thread (or the thread was already in the finished state)     
         *retval = thread->result;
+
+        VALGRIND_STACK_DEREGISTER(thread->stack);
 
     set_signals();
     return 0;
