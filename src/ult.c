@@ -262,8 +262,10 @@ int ult_join(ult_t* thread, void** retval) {
             SWAP_TO_SCHEDULER(&(current_waiting_join->context)); // the scheduler would set the signals back, but just to make sure
         }
 
-        // current thread is now running after the finish of the to-be-joined thread (or the thread was already in the finished state)     
-        *retval = thread->result;
+        // current thread is now running after the finish of the to-be-joined thread (or the thread was already in the finished state)
+        if (retval != NULL) {
+            *retval = thread->result;
+        }
 
         VALGRIND_STACK_DEREGISTER(thread->stack);
 

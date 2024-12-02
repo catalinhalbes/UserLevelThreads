@@ -44,7 +44,7 @@ void* print_char(void* arg) {
     return (void*)i;
 }
 
-int main() {
+void test1() {
     ult_mutex_t* mutexes = (ult_mutex_t*) malloc(sizeof(ult_mutex_t) * 2);
     ult_t* threads = (ult_t*) malloc(sizeof(ult_t) * 4);
 
@@ -72,6 +72,84 @@ int main() {
 
     free(mutexes);
     free(threads);
+}
 
+void* deadlock_worker(void* arg) {
+    ult_mutex_t* mutex1 = *((ult_mutex_t**) arg);
+    ult_mutex_t* mutex2 = *((ult_mutex_t**) arg + 1);
+
+    uint64_t res = 0;
+
+    printf("[%lu] locking mutex1: %lu\n", ult_get_id(), mutex1->id);
+    ult_mutex_lock(mutex1);
+    printf("[%lu]                       locked mutex1: %lu\n", ult_get_id(), mutex1->id);
+
+    for (uint64_t j = 0; j < 100000000; j++) {
+        res += sqrt(j * j * j);
+    }
+
+    printf("[%lu] locking mutex2: %lu\n", ult_get_id(), mutex2->id);
+    ult_mutex_lock(mutex2);
+    printf("[%lu]                       locked mutex2: %lu\n", ult_get_id(), mutex2->id);
+
+    for (uint64_t j = 0; j < 100000000; j++) {
+        res += sqrt(j * j * j);
+    }
+
+    ult_mutex_unlock(mutex1);
+    printf("[%lu]                                            unlocked mutex1: %lu\n", ult_get_id(), mutex1->id);
+
+    ult_mutex_unlock(mutex2);
+    printf("[%lu]                                            unlocked mutex2: %lu\n", ult_get_id(), mutex2->id);
+
+    return (void*) res;
+}
+
+void* heartbeat_worker(void*) {
+    uint64_t i = 0, j = 0;
+    while(1) {
+        i += 1;
+
+        if (i % 0x100000000llu == 0) {
+            j += 1;
+            printf("[%lu] Keeping the scheduler busy no %lu\n", ult_get_id(), j);
+        }
+    }
+}
+
+void deadlock_test(int thread_num) {
+    ult_mutex_t* mutexes = (ult_mutex_t*) malloc(sizeof(ult_mutex_t) * thread_num);
+    ult_mutex_t** mutex_list = (ult_mutex_t**) malloc(sizeof(ult_mutex_t*) * (thread_num) + 1);
+    ult_t* threads = (ult_t*) malloc(sizeof(ult_t) * (thread_num + 1));
+
+    for (int i = 0; i < thread_num; i++) {
+        ult_mutex_init(mutexes + i);
+    }
+
+    for (int i = 0; i < thread_num + 1; i++) {
+        mutex_list[i] = &mutexes[i % thread_num];
+    }
+
+    for (int i = 0; i < thread_num; i++) {
+        ult_create(threads + i, deadlock_worker, mutex_list + i);
+    }
+
+    ult_create(threads + thread_num, heartbeat_worker, NULL);
+    
+    for (int i = 0; i < thread_num; i++) {
+        ult_join(&threads[i], NULL);
+        printf("Thread %lu joined\n", threads[i].id);
+    }
+
+    for (int i = 0; i < thread_num; i++) {
+        ult_mutex_destroy(&mutexes[i]);
+    }
+
+    free(mutexes);
+    free(threads);
+}
+
+int main() {
+    deadlock_test(4);
     return 0;
 }
