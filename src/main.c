@@ -9,7 +9,7 @@ uint64_t count = 0, run = 1;
 typedef struct {
     char character;
     uint64_t count;
-    uint64_t seconds;
+    uint64_t nano_seconds;
     ult_mutex_t* mut;
 } thread_arg;
 
@@ -23,13 +23,12 @@ void* print_char(void* arg) {
     printf("[%lu] mutex %lu locked, err: %d\n", ult_get_id(), targ.mut->id, err);
 
     while (i < targ.count) {
-        uint64_t res = 0;
-
+        // uint64_t res = 0;
         // for (uint64_t j = 0; j < targ.seconds * 30000000; j++) {
         //     res += sqrt(j * j * j);
         // }
 
-        ult_sleep(targ.seconds, 0);
+        ult_sleep(0, targ.nano_seconds);
 
         printf("[%lu]", ult_get_id());
         for (int i = 0; i < ult_get_id(); i++) printf("\t");
@@ -54,7 +53,7 @@ void test1() {
         printf("[%lu] created mutex: %lu\n", ult_get_id(), mutexes[i].id);
     }
 
-    thread_arg args[4] = {{'A', 10, 8, &mutexes[1]}, {'B', 20, 4, &mutexes[0]}, {'C', 40, 2, &mutexes[0]}, {'D', 80, 1, &mutexes[1]}};
+    thread_arg args[4] = {{'A', 10, 800000000, &mutexes[1]}, {'B', 20, 400000000, &mutexes[0]}, {'C', 40, 200000000, &mutexes[0]}, {'D', 80, 100000000, &mutexes[1]}};
 
     for (int i = 0; i < 4; i++)
         ult_create(threads + i, print_char, args + i);

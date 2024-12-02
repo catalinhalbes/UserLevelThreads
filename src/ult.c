@@ -26,12 +26,34 @@ static char scheduler_stack[DEFAULT_ULT_STACK_SIZE]; // only accessed by the sch
 
 static ult_t main_ult;
 
-static ult_linked_list_t running_ult_list;
+static ult_linked_list_t running_ult_list, not_finished_ults;
 static volatile uint64_t ult_counter = 0;
 static volatile uint64_t mutex_counter = 0;
+static uint32_t deadlock_counter = 0; // this value combined with the explore counter in the ult structure will indicate if a node in the lock graph was already explored in the current stage
+                                      // we don't care about overflows, by this reason this variable could have been byte sized, but for alignment reasons the structure will use a 32bit unsigned
 
 // alarm triggered?
 static volatile uint8_t should_change_thread = 0;
+
+static void set_signals();
+static void unset_signals();
+
+void find_deadlocks() {
+    unset_signals();
+
+    deadlock_counter += 1;
+
+    ult_linked_list_t* explore_stack, path_stack;
+
+    ult_node_t* current_ult_node = not_finished_ults.head;
+    while (current_ult_node != NULL) {
+        // start exploring from the current 
+
+        current_ult_node = current_ult_node->next;
+    }
+
+    set_signals();
+}
 
 void sig_handler(int signum) {
     // See SIGVTALRM (virtual time, none passes while the process is paused)
@@ -43,24 +65,24 @@ void sig_handler(int signum) {
             break;
 
         case SIGUSR2:
-            // printf("SIGUSR2\n");
+            find_deadlocks();
             break;
     }
 }
 
 static void set_signals() {
-    if (signal(SIGALRM, sig_handler) == SIG_ERR)
+    if (signal(SIGUSR1, sig_handler) == SIG_ERR)
         BAIL("Unable to catch SIGALRM");
 
-    if (signal(SIGUSR1, sig_handler) == SIG_ERR)
+    if (signal(SIGUSR2, sig_handler) == SIG_ERR)
         BAIL("Unable to catch SIGUSR1");
 }
 
 static void unset_signals() {
-    if (signal(SIGALRM, SIG_IGN) == SIG_ERR)
+    if (signal(SIGUSR1, SIG_IGN) == SIG_ERR)
         BAIL("Unable to catch SIGALRM");
 
-    if (signal(SIGUSR1, SIG_IGN) == SIG_ERR)
+    if (signal(SIGUSR2, SIG_IGN) == SIG_ERR)
         BAIL("Unable to catch SIGUSR1");
 }
 
@@ -215,6 +237,7 @@ static inline void init_lib() {
         // printf("Initializing library\n");
 
         init_ult_linked_list(&running_ult_list);
+        init_ult_linked_list(&not_finished_ults);
 
         // this is the first call to the library
         unset_signals();
@@ -245,6 +268,7 @@ int ult_create(ult_t* thread, voidptr_arg_voidptr_ret_func start_routine, void* 
         
     unset_signals();
         insert_ult_last(&running_ult_list, thread);
+        insert_ult_last(&not_finished_ults, thread);
     set_signals();
 
     // TODO: maybe it would be more 'fair' to call swap
@@ -283,12 +307,26 @@ int ult_join(ult_t* thread, void** retval) {
             current_waiting_join->status = WAITING;
             delete_ult_first(&running_ult_list); // remove the current thread from the running list
 
-            SWAP_TO_SCHEDULER(&(current_waiting_join->context)); // the scheduler would set the signals back, but just to make sure
+            unset_signals();
+            SWAP_TO_SCHEDULER(&(current_waiting_join->context)); // the scheduler would set the signals back
+            set_signals();
         }
 
         // current thread is now running after the finish of the to-be-joined thread (or the thread was already in the finished state)
         if (retval != NULL) {
             *retval = thread->result;
+        }
+
+        // remove the thread from the not finished list
+        ult_node_t* current = not_finished_ults.head;
+        while (current != NULL) {
+            if (current->ult->id == thread->id) {
+                // there won't be duplicate ids, we can exit immediately after deleting this node so there is no need to save the next node pointer
+                delete_ult_node(&not_finished_ults, current);
+                break;
+            }
+
+            current = current->next;
         }
 
         VALGRIND_STACK_DEREGISTER(thread->stack);
@@ -372,7 +410,9 @@ int ult_mutex_lock(ult_mutex_t* mutex) {
         current->status = WAITING;
         delete_ult_first(&running_ult_list);
 
+        unset_signals();
         SWAP_TO_SCHEDULER(&(current->context));
+        set_signals();
 
         // from now on the mutex is held by the curent thread
         insert_mutex_last(&(current->held_mutexes), mutex);

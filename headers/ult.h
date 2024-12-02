@@ -39,6 +39,7 @@ typedef struct ult_t{
 
     struct ult_t*                   waiting_join;
     mutex_linked_list_t             held_mutexes;
+    uint32_t                        deadlock_explore_counter;
 
     voidptr_arg_voidptr_ret_func    start_routine;
     ucontext_t                      context;
