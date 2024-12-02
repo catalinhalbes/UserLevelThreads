@@ -5,7 +5,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <string.h>
-#include <time.h>
 #include <sys/types.h>
 
 #include <valgrind/valgrind.h>
@@ -125,6 +124,31 @@ void scheduler_worker() {
             if (should_change_thread) {
                 should_change_thread = 0;
                 rotate_ult_front_to_back(&running_ult_list);
+            }
+
+            ult_t* thread = running_ult_list.head->ult;
+
+            while (thread->status != RUNNING) {
+                if (thread->status == SLEEPING) {
+                    struct timespec current_time;
+
+                    if (clock_gettime(CLOCKID, &current_time) == -1) {
+                        BAIL("Get Time");
+                    }
+
+                    const uint64_t ns_in_sec = 1000000000;
+                    uint64_t elapsed = (current_time.tv_sec - thread->sleep_time.tv_sec) * ns_in_sec + (current_time.tv_nsec - thread->sleep_time.tv_nsec);
+                    
+                    if (elapsed > thread->sleep_amount_nsec) {
+                        // the thread should wake up
+                        thread->status = RUNNING;
+                    }
+                    else {
+                        // the thread should remain sleeping
+                        rotate_ult_front_to_back(&running_ult_list);
+                        thread = running_ult_list.head->ult;
+                    }
+                }
             }
 
             if (running_ult_list.size == 0) {
@@ -271,6 +295,19 @@ int ult_join(ult_t* thread, void** retval) {
 
     set_signals();
     return 0;
+}
+
+void ult_sleep(uint64_t sec, uint64_t nsec) {
+    ult_t* current = running_ult_list.head->ult;
+
+    if (clock_gettime(CLOCKID, &(current->sleep_time)) == -1) {
+        BAIL("Get Time");
+    }
+
+    current->sleep_amount_nsec = sec * 1000000000 + nsec;
+    current->status = SLEEPING;
+
+    SWAP_TO_SCHEDULER(&(current->context));
 }
 
 uint64_t ult_get_id() {

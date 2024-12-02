@@ -25,13 +25,14 @@ void* print_char(void* arg) {
     while (i < targ.count) {
         uint64_t res = 0;
 
-        for (uint64_t j = 0; j < targ.seconds * 30000000; j++) {
-            res += sqrt(j * j * j);
-        }
+        // for (uint64_t j = 0; j < targ.seconds * 30000000; j++) {
+        //     res += sqrt(j * j * j);
+        // }
+
+        ult_sleep(targ.seconds, 0);
 
         printf("[%lu]", ult_get_id());
-        for (int i = 0; i < ult_get_id(); i++)
-            printf("\t");
+        for (int i = 0; i < ult_get_id(); i++) printf("\t");
         printf("%c %lu\n", targ.character, i);
         fflush(NULL);
 
@@ -78,23 +79,17 @@ void* deadlock_worker(void* arg) {
     ult_mutex_t* mutex1 = *((ult_mutex_t**) arg);
     ult_mutex_t* mutex2 = *((ult_mutex_t**) arg + 1);
 
-    uint64_t res = 0;
-
     printf("[%lu] locking mutex1: %lu\n", ult_get_id(), mutex1->id);
     ult_mutex_lock(mutex1);
     printf("[%lu]                       locked mutex1: %lu\n", ult_get_id(), mutex1->id);
 
-    for (uint64_t j = 0; j < 100000000; j++) {
-        res += sqrt(j * j * j);
-    }
+    ult_sleep(3, 0);
 
     printf("[%lu] locking mutex2: %lu\n", ult_get_id(), mutex2->id);
     ult_mutex_lock(mutex2);
     printf("[%lu]                       locked mutex2: %lu\n", ult_get_id(), mutex2->id);
 
-    for (uint64_t j = 0; j < 100000000; j++) {
-        res += sqrt(j * j * j);
-    }
+    ult_sleep(3, 0);
 
     ult_mutex_unlock(mutex1);
     printf("[%lu]                                            unlocked mutex1: %lu\n", ult_get_id(), mutex1->id);
@@ -102,18 +97,33 @@ void* deadlock_worker(void* arg) {
     ult_mutex_unlock(mutex2);
     printf("[%lu]                                            unlocked mutex2: %lu\n", ult_get_id(), mutex2->id);
 
-    return (void*) res;
+    return NULL;
 }
 
 void* heartbeat_worker(void*) {
-    uint64_t i = 0, j = 0;
+    uint64_t i = 0;
+    struct timespec start, current, prev;
+
+    if (clock_gettime(CLOCK_REALTIME, &start) == -1) {
+        perror("clock_gettime");
+    }
+
+    prev = start;
+
     while(1) {
         i += 1;
+        ult_sleep(3, 500000000);
 
-        if (i % 0x100000000llu == 0) {
-            j += 1;
-            printf("[%lu] Keeping the scheduler busy no %lu\n", ult_get_id(), j);
+        if (clock_gettime(CLOCK_REALTIME, &current) == -1) {
+            perror("clock_gettime");
         }
+
+        double elapsed_start = (current.tv_sec - start.tv_sec) + (current.tv_nsec - start.tv_nsec) / 1e9;
+        double elapsed_prev = (current.tv_sec - prev.tv_sec) + (current.tv_nsec - prev.tv_nsec) / 1e9;
+
+        printf("[%lu] Keeping the scheduler busy %lu (elapsed: %lfs, since start: %lfs)\n", ult_get_id(), i, elapsed_prev, elapsed_start);
+
+        prev = current;
     }
 }
 
@@ -150,6 +160,7 @@ void deadlock_test(int thread_num) {
 }
 
 int main() {
-    deadlock_test(4);
+    test1();
+    // deadlock_test(4);
     return 0;
 }
