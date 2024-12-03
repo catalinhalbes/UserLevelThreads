@@ -5,11 +5,11 @@
 pthread_t threads[8];
 pthread_mutex_t mutexes[8];
 
-typedef struct thread_arg {
+typedef struct t_arg {
     uint64_t id;
     pthread_mutex_t* mutex1;
     pthread_mutex_t* mutex2;
-} thread_arg;
+} t_arg;
 
 uint64_t do_long_work(uint64_t multiplier) {
     volatile uint64_t res = 1;
@@ -19,7 +19,7 @@ uint64_t do_long_work(uint64_t multiplier) {
 }
 
 void* worker(void* arg) {
-    thread_arg* targ = (thread_arg*) arg;
+    t_arg* targ = (t_arg*) arg;
 
     printf("[%lu] waiting mutex1\n", targ->id); fflush(NULL);
     pthread_mutex_lock(targ->mutex1);
@@ -41,7 +41,7 @@ int main() {
     for (int i = 0; i < 8; i++)
         pthread_mutex_init(&mutexes[i], NULL);
 
-    thread_arg args[] = {
+    t_arg args[] = {
         {1, &mutexes[0], &mutexes[1]},
         {2, &mutexes[1], &mutexes[2]},
         {3, &mutexes[2], &mutexes[3]},

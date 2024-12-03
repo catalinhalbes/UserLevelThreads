@@ -15,7 +15,7 @@
 #define CLOCKID CLOCK_REALTIME
 #define TIMER_SIG SIGUSR1
 #define DEADLOCK_SIG SIGUSR2
-#define TIMER_INTERVAL_NS 100000000 //ns = 100ms
+#define TIMER_INTERVAL_NS 1000000 //ns = 1ms
 
 #define SWAP_TO_SCHEDULER(context) \
     if (swapcontext(context, &scheduler_context) != 0) \
@@ -51,11 +51,11 @@ void find_deadlocks() {
 
     deadlock_counter += 1;
 
-    ult_linked_list_t explore_stack, path_stack;
+    ult_linked_list_t explore_stack, path;
     init_ult_linked_list(&explore_stack);
-    init_ult_linked_list(&path_stack);
+    init_ult_linked_list(&path);
 
-    int found_deadlocks = 0;
+    uint64_t found_deadlocks = 0;
 
     ult_node_t* candidate = not_finished_ults.head;
     while (candidate != NULL) { // start exploring from the current node
@@ -66,7 +66,7 @@ void find_deadlocks() {
 
             if (current == NULL) {
                 // we explored the current node entirely, now backtrack a level
-                delete_ult_first(&path_stack);
+                delete_ult_last(&path);
                 continue;
             }
 
@@ -74,13 +74,27 @@ void find_deadlocks() {
                 // the node is already explored
                 // look after a cycle in the explored path
 
-                ult_node_t* path_node = path_stack.head;
+                ult_node_t* path_node = path.head;
+                uint8_t deadlock = 0;
                 while (path_node != NULL) {
-                    if (current->id == path_node->ult->id) {
+                    if (deadlock) {
+                        // we found a deadlock, continue by printing the threads caugth in the deadlock cycle
+                        printf(" -> %lu", path_node->ult->id);
+                    } 
+                    else if (current->id == path_node->ult->id) {
                         found_deadlocks += 1;
-                        break;
+                        deadlock = 1;
+
+                        if (found_deadlocks == 1) {
+                            printf("\n\n====\n\n");
+                        }
+
+                        printf ("Deadlock %lu:\n %lu", found_deadlocks, current->id);
                     }
                     path_node = path_node->next;
+                }
+                if (deadlock) {
+                    printf(" -> %lu \n\n", current->id); fflush(NULL);
                 }
                 continue;
             }
@@ -88,7 +102,7 @@ void find_deadlocks() {
             // the current thread is not explored
             current->deadlock_explore_counter = deadlock_counter;
             
-            insert_ult_first(&path_stack, current);
+            insert_ult_last(&path, current);
             insert_ult_first(&explore_stack, NULL);
 
             ult_t* next_candidate = current->waiting_to_join;
@@ -104,7 +118,7 @@ void find_deadlocks() {
         candidate = candidate->next;
     }
 
-    printf("\n\n====\nFound %d deadlocks\n====\n\n", found_deadlocks); fflush(NULL);
+    printf("====\nFound %lu deadlocks\n====\n\n", found_deadlocks); fflush(NULL);
 
     end_protected_zone();
 }
@@ -198,8 +212,13 @@ void scheduler_worker() {
             // printf("[scheduler] rotate from %lu to %lu\n", running_ult_list.tail->ult->id, running_ult_list.head->ult->id); fflush(NULL);
         }
 
+        if (running_ult_list.size == 0) {
+            find_deadlocks();
+            BAIL("There are no running threads! This might indicate that a deadlock that involves all existing threads occured!");
+        }
+
         ult_t* thread = running_ult_list.head->ult;
-        while (thread->status != RUNNING) { // if all threads are sleeping this loop will repeat until one wakes up
+        while (/*thread != NULL &&*/ thread->status != RUNNING) { // if all threads are sleeping this loop will repeat until one wakes up
             if (thread->status == SLEEPING) {
                 // printf("[scheduler] %lu is sleeping\n", thread->id); fflush(NULL);
                 struct timespec current_time;
@@ -214,7 +233,7 @@ void scheduler_worker() {
                 if (elapsed > thread->sleep_amount_nsec) {
                     // the thread should wake up
                     thread->status = RUNNING;
-                    printf("[scheduler] waking up %lu\n", thread->id); fflush(NULL);
+                    // printf("[scheduler] waking up %lu\n", thread->id); fflush(NULL);
                 }
                 else {
                     // the thread should remain sleeping
@@ -226,14 +245,10 @@ void scheduler_worker() {
             }
         }
 
-        if (running_ult_list.size == 0) {
-            BAIL("There are no running threads! This might indicate that a deadlock that involves all existing threads occured!");
-        }
-
         end_protected_zone(); // set signal handlers before switch
         inside_scheduler = 0;
 
-        printf("[scheduler] switch to %lu\n", running_ult_list.head->ult->id); fflush(NULL);
+        // printf("[scheduler] switch to %lu\n", running_ult_list.head->ult->id); fflush(NULL);
         // swapcontext out of scheduler
         if (swapcontext(&scheduler_context, &(running_ult_list.head->ult->context)) != 0) 
             BAIL("Swapcontext scheduler");

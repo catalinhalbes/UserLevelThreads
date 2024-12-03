@@ -13,6 +13,16 @@ typedef struct {
     ult_mutex_t* mut;
 } thread_arg;
 
+ult_t threads[8];
+ult_mutex_t mutexes[8];
+
+typedef struct t_arg {
+    ult_mutex_t* mutex1;
+    ult_mutex_t* mutex2;
+} t_arg;
+
+////////////////// Test 1 ///////////////////////
+
 void do_work(uint64_t work) {
     double res = 0;
     for (uint64_t j = 0; j < work; j++) {
@@ -77,6 +87,8 @@ void test1() {
     free(mutexes);
     free(threads);
 }
+
+//////////////// Deadlock test //////////////////
 
 void* deadlock_worker(void* arg) {
     ult_mutex_t* mutex1 = *((ult_mutex_t**) arg);
@@ -162,8 +174,80 @@ void deadlock_test(int thread_num) {
     free(threads);
 }
 
+///////////////// Deadlock test 2 //////////////////
+
+uint64_t do_long_work(uint64_t multiplier) {
+    volatile uint64_t res = 1;
+    for (uint64_t i = 0; i < multiplier * 100000000; i++)
+        res += (i * i * i) / res;
+    return res;
+}
+
+void* worker(void* arg) {
+    t_arg* targ = (t_arg*) arg;
+
+    printf("  {%lu} waiting mutex1 {%lu}\n", ult_get_id(), targ->mutex1->id); fflush(NULL);
+    ult_mutex_lock(targ->mutex1);
+    printf("  {%lu}                  locked mutex1 {%lu}\n", ult_get_id(), targ->mutex1->id); fflush(NULL);
+
+    do_long_work(1);
+
+    printf("  {%lu} waiting mutex2 {%lu}\n", ult_get_id(), targ->mutex2->id); fflush(NULL);
+    ult_mutex_lock(targ->mutex2);
+    printf("  {%lu}                  locked mutex2 {%lu}\n", ult_get_id(), targ->mutex2->id); fflush(NULL);
+
+    ult_mutex_unlock(targ->mutex1);
+    ult_mutex_unlock(targ->mutex2);
+
+    return NULL;
+}
+
+void* deadlock_main_with_mutex(void* mut) {
+    ult_mutex_lock((ult_mutex_t*) mut);
+    ult_mutex_unlock((ult_mutex_t*) mut);
+
+    return NULL;
+}
+
+void* self_join(void* thread) {
+    ult_join((ult_t*) thread, NULL);
+    return NULL;
+}
+
+void deadlock_test2() {
+    for (int i = 0; i < 8; i++)
+        ult_mutex_init(&mutexes[i]);
+
+    t_arg args[] = {
+        {&mutexes[0], &mutexes[1]}, // 2
+        {&mutexes[1], &mutexes[2]}, // 3
+        {&mutexes[2], &mutexes[3]}, // 4
+        {&mutexes[3], &mutexes[1]}, // 5
+        {&mutexes[4], &mutexes[3]}, // 6
+        {&mutexes[5], &mutexes[2]}, // 7
+        {&mutexes[6], &mutexes[7]}, // 8
+        {&mutexes[7], &mutexes[6]}  // 9
+    };
+
+    for (int i = 0; i < 8; i++)
+        ult_create(&threads[i], worker, (void*) &args[i]);
+
+    ult_t heartbeat, deadlock_main, selfjoin; 
+    ult_mutex_t main_mutex;
+    
+    ult_mutex_init(&main_mutex);
+    ult_mutex_lock(&main_mutex);
+
+    ult_create(&deadlock_main, deadlock_main_with_mutex, (void*) &main_mutex);
+    ult_create(&selfjoin, self_join, (void*) &selfjoin);
+    ult_create(&heartbeat, heartbeat_worker, NULL);
+
+    ult_join(&deadlock_main, NULL);
+}
+
 int main() {
     // test1();
-    deadlock_test(4);
+    // deadlock_test(4);
+    deadlock_test2();
     return 0;
 }
