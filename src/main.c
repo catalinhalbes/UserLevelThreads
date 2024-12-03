@@ -159,7 +159,7 @@ void deadlock_test(int thread_num) {
 }
 
 int main() {
-    test1();
-    // deadlock_test(4);
+    // test1();
+    deadlock_test(4);
     return 0;
 }

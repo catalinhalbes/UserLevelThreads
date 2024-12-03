@@ -54,11 +54,11 @@ typedef struct {
 } ult_linked_list_t;
 
 void init_ult_linked_list(ult_linked_list_t* list);
-void insert_ult_first(generic_linked_list_t* list, ult_t* ult);
+void insert_ult_first(ult_linked_list_t* list, ult_t* ult);
 void insert_ult_last(ult_linked_list_t* list, ult_t* ult);
 void delete_ult_node(ult_linked_list_t* list, ult_node_t* node);
 void delete_ult_first(ult_linked_list_t* list);
-void delete_ult_last(generic_linked_list_t* list);
+void delete_ult_last(ult_linked_list_t* list);
 void rotate_ult_front_to_back(ult_linked_list_t* list);
 void destroy_ult_list(ult_linked_list_t* list);
 

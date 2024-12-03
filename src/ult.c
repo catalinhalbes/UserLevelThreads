@@ -34,69 +34,106 @@ static uint32_t deadlock_counter = 0; // this value combined with the explore co
 
 // alarm triggered?
 static volatile uint8_t should_change_thread = 0;
+static volatile uint8_t should_look_after_deadlocks = 0;
+
 
 static void set_signals();
 static void unset_signals();
 
 void find_deadlocks() {
-    unset_signals();
-
     deadlock_counter += 1;
 
-    ult_linked_list_t* explore_stack, path_stack;
+    ult_linked_list_t explore_stack, path_stack;
+    init_ult_linked_list(&explore_stack);
+    init_ult_linked_list(&path_stack);
 
-    ult_node_t* current_ult_node = not_finished_ults.head;
-    while (current_ult_node != NULL) {
-        // start exploring from the current 
+    int found_deadlocks = 0;
 
-        current_ult_node = current_ult_node->next;
+    ult_node_t* candidate = not_finished_ults.head;
+    while (candidate != NULL) { // start exploring from the current node
+        insert_ult_first(&explore_stack, candidate->ult);
+
+        while(explore_stack.size > 0) {
+            ult_t* current = explore_stack.head->ult; delete_ult_first(&explore_stack);
+
+            if (current == NULL) {
+                // we explored the current node entirely, now backtrack a level
+                delete_ult_first(&path_stack);
+                continue;
+            }
+
+            if (current->deadlock_explore_counter == deadlock_counter) {
+                // the node is already explored
+                // look after a cycle in the explored path
+
+                ult_node_t* path_node = path_stack.head;
+                while (path_node != NULL) {
+                    if (current->id == path_node->ult->id) {
+                        found_deadlocks += 1;
+                        break;
+                    }
+                    path_node = path_node->next;
+                }
+                continue;
+            }
+
+            // the current thread is not explored
+            current->deadlock_explore_counter = deadlock_counter;
+            
+            insert_ult_first(&path_stack, current);
+            insert_ult_first(&explore_stack, NULL);
+
+            ult_t* next_candidate = current->waiting_to_join;
+            if (next_candidate != NULL) {
+                insert_ult_first(&explore_stack, next_candidate);
+            }
+
+            if (current->waiting_mutex != NULL) {
+                next_candidate = current->waiting_mutex->owner;
+                insert_ult_first(&explore_stack, next_candidate);
+            }
+        }
+        candidate = candidate->next;
     }
 
-    set_signals();
+    printf("\n\n====\nFound %d deadlocks\n====\n\n", found_deadlocks); fflush(NULL);
 }
 
 void sig_handler(int signum) {
-    // See SIGVTALRM (virtual time, none passes while the process is paused)
-    // NOTE: // printf shoud not be called inside a signal handler as it is not signal safe
-
     switch (signum) {
         case SIGUSR1:
             SWAP_TO_SCHEDULER(&(running_ult_list.head->ult->context));
             break;
 
         case SIGUSR2:
-            find_deadlocks();
+            should_look_after_deadlocks = 1;
             break;
     }
 }
 
 static void set_signals() {
     if (signal(SIGUSR1, sig_handler) == SIG_ERR)
-        BAIL("Unable to catch SIGALRM");
-
-    if (signal(SIGUSR2, sig_handler) == SIG_ERR)
         BAIL("Unable to catch SIGUSR1");
 }
 
 static void unset_signals() {
     if (signal(SIGUSR1, SIG_IGN) == SIG_ERR)
-        BAIL("Unable to catch SIGALRM");
-
-    if (signal(SIGUSR2, SIG_IGN) == SIG_ERR)
-        BAIL("Unable to catch SIGUSR1");
+        BAIL("Unable to unset SIGUSR1");
 }
 
 static inline void init_ult(ult_t* ult, uint64_t id, voidptr_arg_voidptr_ret_func start_routine, void* arg) {
-    ult->id = id;
+    ult->id     = id;
     ult->status = RUNNING;
     ult->result = NULL;
 
-    ult->waiting_join = NULL;
-    init_mutex_linked_list(&(ult->held_mutexes)); 
+    ult->joined_by             = NULL;
+    ult->waiting_to_join                  = NULL;
+    ult->waiting_mutex            = NULL;
+    ult->deadlock_explore_counter = 0;
 
-    ult->arg = arg;
+    ult->arg           = arg;
     ult->start_routine = start_routine;
-    ult->waiting_join = NULL;
+    ult->joined_by  = NULL;
 }
 
 static inline void init_ult_context(ult_t* ult, ucontext_t* link) {
@@ -125,10 +162,11 @@ void wrapper() {
         delete_ult_first(&running_ult_list);    // in theory the current thread is the first
         // the memory is freed after join
 
-        if (current->waiting_join != NULL) {
-            // printf("[%lu] wrapper, change status of (%lu) to RUNNING\n", current->id, current->waiting_join->id); fflush(NULL);
-            current->waiting_join->status = RUNNING; // wake the thread waiting to join the current thread, without changing the run order
-            insert_ult_last(&running_ult_list, current->waiting_join);
+        if (current->joined_by != NULL) {
+            // printf("[%lu] wrapper, change status of (%lu) to RUNNING\n", current->id, current->joined_by->id); fflush(NULL);
+            current->joined_by->status = RUNNING; // wake the thread waiting to join the current thread, without changing the run order
+            current->joined_by->waiting_to_join = NULL;
+            insert_ult_last(&running_ult_list, current->joined_by);
         }
 
         // printf("[%lu] wrapper exit\n", current->id); fflush(NULL);
@@ -142,10 +180,16 @@ void scheduler_worker() {
     // printf("[scheduler] scheduler started\n");
 
     while (1) {
+            // check for deadlocks?
+            if (should_look_after_deadlocks) {
+                find_deadlocks();
+                should_look_after_deadlocks = 0;
+            }
+
             // check if we should change the execution to another thread
             if (should_change_thread) {
-                should_change_thread = 0;
                 rotate_ult_front_to_back(&running_ult_list);
+                should_change_thread = 0;
             }
 
             ult_t* thread = running_ult_list.head->ult;
@@ -244,6 +288,9 @@ static inline void init_lib() {
         init_scheduler();
         init_timer();
         init_main(); // we initialize main after initializing all other lib parts to make sure that we don't execute the code twice
+
+        if (signal(SIGUSR2, sig_handler) == SIG_ERR)
+            BAIL("Unable to catch SIGUSR2");
     }
 }
 
@@ -284,9 +331,9 @@ int ult_join(ult_t* thread, void** retval) {
 
         // printf("[%lu] waiting to join: %lu\n", current_waiting_join->id, thread->id); fflush(NULL);
 
-        if (thread->waiting_join != NULL) {
+        if (thread->joined_by != NULL) {
             // the thread is already being waited by some other thread
-            // printf("[%lu] %lu was already waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
+            // printf("[%lu] %lu was already waited by %lu\n", current_waiting_join->id, thread->id, thread->joined_by->id); fflush(NULL);
 
             set_signals();
             return 2;
@@ -295,16 +342,17 @@ int ult_join(ult_t* thread, void** retval) {
         if (thread->status != FINISHED) {
             // printf("[%lu] %lu did not finish yet\n", current_waiting_join->id, thread->id); fflush(NULL);
 
-            if (thread->waiting_join != NULL) {
+            if (thread->joined_by != NULL) {
                 // the thread is already being waited by some other thread
-                // printf("[%lu] %lu is being waited by %lu\n", current_waiting_join->id, thread->id, thread->waiting_join->id); fflush(NULL);
+                // printf("[%lu] %lu is being waited by %lu\n", current_waiting_join->id, thread->id, thread->joined_by->id); fflush(NULL);
 
                 set_signals();
                 return 2;
             }
 
-            thread->waiting_join = current_waiting_join;
+            thread->joined_by = current_waiting_join;
             current_waiting_join->status = WAITING;
+            current_waiting_join->waiting_to_join = thread;
             delete_ult_first(&running_ult_list); // remove the current thread from the running list
 
             unset_signals();
@@ -408,14 +456,12 @@ int ult_mutex_lock(ult_mutex_t* mutex) {
         // the current thread should wait
         insert_ult_last(&(mutex->waiting), current);
         current->status = WAITING;
+        current->waiting_mutex = mutex;
         delete_ult_first(&running_ult_list);
 
         unset_signals();
         SWAP_TO_SCHEDULER(&(current->context));
         set_signals();
-
-        // from now on the mutex is held by the curent thread
-        insert_mutex_last(&(current->held_mutexes), mutex);
 
     set_signals();
     
@@ -435,19 +481,6 @@ int ult_mutex_unlock(ult_mutex_t* mutex) {
             return 1;
         }
 
-        // remove the mutex from current thread's held list
-        mutex_node_t* mutex_node = current->held_mutexes.head;
-        while (mutex_node != NULL) {
-            ult_mutex_t* aux = mutex_node->mutex;
-
-            if (aux->id == mutex->id) {
-                delete_mutex_node(&(current->held_mutexes), mutex_node);
-                break;  // in theory the mutex appears only once in the list so no need to preserve the next node
-            }
-
-            mutex_node = mutex_node->next;
-        }
-
         // current thread frees the mutex
         mutex->owner = NULL;
 
@@ -459,6 +492,7 @@ int ult_mutex_unlock(ult_mutex_t* mutex) {
 
             // if there is a thread waiting, WAKE IT UP!
             mutex->owner->status = RUNNING;
+            mutex->owner->waiting_mutex = NULL;
             insert_ult_last(&running_ult_list, mutex->owner);
         }
 

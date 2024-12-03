@@ -37,8 +37,9 @@ typedef struct ult_t{
     struct timespec sleep_time;
     uint64_t sleep_amount_nsec;
 
-    struct ult_t*                   waiting_join;
-    mutex_linked_list_t             held_mutexes;
+    struct ult_t*                   joined_by;       // the thread that waits after the current thread
+    struct ult_t*                   waiting_to_join; // the thread that is waited by the current thread
+    ult_mutex_t*                    waiting_mutex;   // the mutexes that is being waited
     uint32_t                        deadlock_explore_counter;
 
     voidptr_arg_voidptr_ret_func    start_routine;
