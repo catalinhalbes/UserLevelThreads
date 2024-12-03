@@ -194,7 +194,12 @@ void scheduler_worker() {
 
             ult_t* thread = running_ult_list.head->ult;
 
+            uint64_t i = 0;
             while (thread->status != RUNNING) {
+                if (i > running_ult_list.size) { // we've gone over all threads, break the loop
+                    break;
+                }
+
                 if (thread->status == SLEEPING) {
                     struct timespec current_time;
 
@@ -215,6 +220,8 @@ void scheduler_worker() {
                         thread = running_ult_list.head->ult;
                     }
                 }
+
+                i += 1;
             }
 
             if (running_ult_list.size == 0) {
@@ -223,9 +230,11 @@ void scheduler_worker() {
 
         set_signals(); // set signal handlers before switch
 
-            // swapcontext out of scheduler
-            if (swapcontext(&scheduler_context, &(running_ult_list.head->ult->context)) != 0) 
-                BAIL("Swapcontext scheduler");
+            if (i <= running_ult_list.size) { // switch only if we didn't break the loop
+                // swapcontext out of scheduler
+                if (swapcontext(&scheduler_context, &(running_ult_list.head->ult->context)) != 0) 
+                    BAIL("Swapcontext scheduler");
+            }
 
         unset_signals(); // unset signals after switch to avoid scheduler being interrupted
     }
