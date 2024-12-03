@@ -13,21 +13,25 @@ typedef struct {
     ult_mutex_t* mut;
 } thread_arg;
 
+void do_work(uint64_t work) {
+    double res = 0;
+    for (uint64_t j = 0; j < work; j++) {
+        res += sqrt(j * j * j) / (res + 1);
+    }
+}
+
 void* print_char(void* arg) {
     thread_arg targ = *((thread_arg*) arg); // this makes a copy... oh well
     uint64_t i = 0;
 
     int err = 0;
 
+    printf("[%lu] waiting mutex %lu\n", ult_get_id(), targ.mut->id); fflush(NULL);
     err = ult_mutex_lock(targ.mut);
-    printf("[%lu] mutex %lu locked, err: %d\n", ult_get_id(), targ.mut->id, err);
+    printf("[%lu] mutex %lu locked, err: %d\n", ult_get_id(), targ.mut->id, err); fflush(NULL);
 
     while (i < targ.count) {
-        // uint64_t res = 0;
-        // for (uint64_t j = 0; j < targ.seconds * 30000000; j++) {
-        //     res += sqrt(j * j * j);
-        // }
-
+        // do_work(targ.nano_seconds);
         ult_sleep(0, targ.nano_seconds);
 
         printf("[%lu]", ult_get_id());
@@ -39,7 +43,7 @@ void* print_char(void* arg) {
     }
 
     err = ult_mutex_unlock(targ.mut);
-    printf("[%lu] mutex %lu unlocked, err: %d\n", ult_get_id(), targ.mut->id, err);
+    printf("[%lu] mutex %lu unlocked, err: %d\n", ult_get_id(), targ.mut->id, err); fflush(NULL);
 
     return (void*)i;
 }

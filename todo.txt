@@ -1,5 +1,5 @@
 - print the deadlock cycles
 - look into stopping / ignoring the timer instead of ignoring the signals
-
+- the curent fix is not working
 
 kill -SIGUSR2 `pgrep -x ULT | head -n 1`
