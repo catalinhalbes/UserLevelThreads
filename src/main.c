@@ -58,7 +58,6 @@ void* print_char(void* arg) {
     return (void*)i;
 }
 
-
 void* immediate_exit3(void* arg) {
     printf("[%lu] immediate_exit3: enter\n", ult_get_id());
     ult_sleep(2, 0);
@@ -288,9 +287,9 @@ void deadlock_test2() {
 }
 
 int main() {
-    test1();
+    // test1();
     // test2();
-    // deadlock_test(4);
-    // deadlock_test2();
+    // deadlock_test(5);
+    deadlock_test2();
     return 0;
 }

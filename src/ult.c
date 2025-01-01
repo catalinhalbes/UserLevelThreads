@@ -17,13 +17,6 @@
 #define DEADLOCK_SIG SIGUSR2
 #define TIMER_INTERVAL_NS 1000000 //ns = 1ms
 
-#define SWAP_TO_SCHEDULER(context) \
-    if (swapcontext(context, &scheduler_context) != 0) \
-        BAIL("Swapcontext")
-
-static ucontext_t scheduler_context;
-static char scheduler_stack[DEFAULT_ULT_STACK_SIZE]; // only accessed by the scheduler context, volatile probably not needed
-
 static ult_t main_ult;
 
 static ult_linked_list_t running_ult_list, not_finished_ults;
@@ -34,16 +27,18 @@ static uint32_t deadlock_counter = 0; // this value combined with the explore co
 
 // alarm triggered?
 static volatile uint8_t should_change_thread = 0;
-static volatile uint8_t inside_scheduler = 0; // we still need to ignore signals even if we mask them, because masking will keep the signal until it is unmasked, 
-                                            // but we don't want to execute that signal immediately, because we would still be in the scheduler
+static volatile uint8_t inside_protected_zone = 0;  // we still need to ignore signals even if we mask them, because masking will keep the signal until it is unmasked, 
+                                                    // but we don't want to execute that signal immediately, because we would still be in the scheduler
 sigset_t mask_sig, no_mask;
 
 static void start_protected_zone() {
+    inside_protected_zone = 1;
     sigprocmask(SIG_BLOCK, &mask_sig, NULL);
 }
 
 static void end_protected_zone() {
     sigprocmask(SIG_SETMASK, &no_mask, NULL);
+    inside_protected_zone = 0;
 }
 
 void find_deadlocks() {
@@ -123,26 +118,6 @@ void find_deadlocks() {
     end_protected_zone();
 }
 
-void sig_handler(int signum, siginfo_t *si, void *uc) {
-    // printf("[handler] received %d\n", signum); fflush(NULL);
-
-    if (inside_scheduler && signum != DEADLOCK_SIG) {
-        printf("[handler] IGNORE %d (inside scheduler)\n", signum); fflush(NULL);
-        return;
-    }
-
-    switch (signum) {
-        case TIMER_SIG:
-            should_change_thread = 1;
-            SWAP_TO_SCHEDULER(&(running_ult_list.head->ult->context));
-            break;
-
-        case DEADLOCK_SIG:
-            find_deadlocks();
-            break;
-    }
-}
-
 static inline void init_ult(ult_t* ult, uint64_t id, voidptr_arg_voidptr_ret_func start_routine, void* arg) {
     ult->id     = id;
     ult->status = RUNNING;
@@ -169,6 +144,61 @@ static inline void init_ult_context(ult_t* ult, ucontext_t* link) {
     ult->context.uc_link = link;
 }
 
+void SCHEDULER(ult_t* current) {
+    // printf("[scheduler / %ld] scheduler started\n", current->id); fflush(NULL);
+
+    start_protected_zone(); // unset signals after switch to avoid scheduler being interrupted
+
+    // check if we should change the execution to another thread
+    if (should_change_thread) {
+        rotate_ult_front_to_back(&running_ult_list);
+        should_change_thread = 0;
+        // printf("[scheduler] rotate from %lu to %lu\n", running_ult_list.tail->ult->id, running_ult_list.head->ult->id); fflush(NULL);
+    }
+
+    if (running_ult_list.size == 0) {
+        find_deadlocks();
+        BAIL("There are no running threads! This might indicate that a deadlock that involves all existing threads occured!");
+    }
+
+    ult_t* thread = running_ult_list.head->ult;
+    while (/*thread != NULL &&*/ thread->status != RUNNING) { // if all threads are sleeping this loop will repeat until one wakes up
+        if (thread->status == SLEEPING) {
+            // printf("[scheduler] %lu is sleeping\n", thread->id); fflush(NULL);
+            struct timespec current_time;
+
+            if (clock_gettime(CLOCKID, &current_time) == -1) {
+                BAIL("Get Time");
+            }
+
+            const uint64_t ns_in_sec = 1000000000;
+            uint64_t elapsed = (current_time.tv_sec - thread->sleep_time.tv_sec) * ns_in_sec + (current_time.tv_nsec - thread->sleep_time.tv_nsec);
+            
+            if (elapsed > thread->sleep_amount_nsec) {
+                // the thread should wake up
+                thread->status = RUNNING;
+                // printf("[scheduler] waking up %lu\n", thread->id); fflush(NULL);
+            }
+            else {
+                // the thread should remain sleeping
+                // printf("[scheduler] %lu reamains sleeping\n", thread->id); fflush(NULL);
+                rotate_ult_front_to_back(&running_ult_list);
+                thread = running_ult_list.head->ult;
+                // printf("[scheduler] rotate from %lu to %lu\n", running_ult_list.tail->ult->id, running_ult_list.head->ult->id); fflush(NULL);
+            }
+        }
+    }
+
+    end_protected_zone(); // set signal handlers before switch
+
+    // printf("[scheduler] switch to %lu\n", running_ult_list.head->ult->id); fflush(NULL);
+    // no need to swap if the current thread is the next scheduled for execution
+    if (current->id != thread->id) {
+        if (swapcontext(&(current->context), &(thread->context)) != 0) 
+            BAIL("Swapcontext scheduler");
+    }
+}
+
 static inline void wrapper_exit(ult_t* current, void* result) {
     start_protected_zone();
 
@@ -188,6 +218,7 @@ static inline void wrapper_exit(ult_t* current, void* result) {
 
     printf("[%lu] wrapper exit\n", current->id); fflush(NULL);
 
+    SCHEDULER(current);
     end_protected_zone();
 }
 
@@ -202,60 +233,23 @@ void wrapper() {
     wrapper_exit(current, result);
 }
 
-void scheduler_worker() {
-    printf("[scheduler] scheduler started\n");
+void sig_handler(int signum, siginfo_t *si, void *uc) {
+    // printf("[handler] received %d\n", signum); fflush(NULL);
 
-    while (1) {
-        inside_scheduler = 1;
-        start_protected_zone(); // unset signals after switch to avoid scheduler being interrupted
+    if (inside_protected_zone && signum != DEADLOCK_SIG) {
+        printf("[handler] IGNORE %d\n", signum); fflush(NULL);
+        return;
+    }
 
-        // check if we should change the execution to another thread
-        if (should_change_thread) {
-            rotate_ult_front_to_back(&running_ult_list);
-            should_change_thread = 0;
-            // printf("[scheduler] rotate from %lu to %lu\n", running_ult_list.tail->ult->id, running_ult_list.head->ult->id); fflush(NULL);
-        }
+    switch (signum) {
+        case TIMER_SIG:
+            should_change_thread = 1;
+            SCHEDULER(running_ult_list.head->ult);
+            break;
 
-        if (running_ult_list.size == 0) {
+        case DEADLOCK_SIG:
             find_deadlocks();
-            BAIL("There are no running threads! This might indicate that a deadlock that involves all existing threads occured!");
-        }
-
-        ult_t* thread = running_ult_list.head->ult;
-        while (/*thread != NULL &&*/ thread->status != RUNNING) { // if all threads are sleeping this loop will repeat until one wakes up
-            if (thread->status == SLEEPING) {
-                // printf("[scheduler] %lu is sleeping\n", thread->id); fflush(NULL);
-                struct timespec current_time;
-
-                if (clock_gettime(CLOCKID, &current_time) == -1) {
-                    BAIL("Get Time");
-                }
-
-                const uint64_t ns_in_sec = 1000000000;
-                uint64_t elapsed = (current_time.tv_sec - thread->sleep_time.tv_sec) * ns_in_sec + (current_time.tv_nsec - thread->sleep_time.tv_nsec);
-                
-                if (elapsed > thread->sleep_amount_nsec) {
-                    // the thread should wake up
-                    thread->status = RUNNING;
-                    // printf("[scheduler] waking up %lu\n", thread->id); fflush(NULL);
-                }
-                else {
-                    // the thread should remain sleeping
-                    // printf("[scheduler] %lu reamains sleeping\n", thread->id); fflush(NULL);
-                    rotate_ult_front_to_back(&running_ult_list);
-                    thread = running_ult_list.head->ult;
-                    // printf("[scheduler] rotate from %lu to %lu\n", running_ult_list.tail->ult->id, running_ult_list.head->ult->id); fflush(NULL);
-                }
-            }
-        }
-
-        end_protected_zone(); // set signal handlers before switch
-        inside_scheduler = 0;
-
-        // printf("[scheduler] switch to %lu\n", running_ult_list.head->ult->id); fflush(NULL);
-        // swapcontext out of scheduler
-        if (swapcontext(&scheduler_context, &(running_ult_list.head->ult->context)) != 0) 
-            BAIL("Swapcontext scheduler");
+            break;
     }
 }
 
@@ -267,17 +261,6 @@ static void init_main() {
     init_ult_context(&main_ult, NULL); // when main is done the entire program is done, no cleanup will be done after
 
     insert_ult_last(&running_ult_list, &main_ult);
-}
-
-static void init_scheduler() {
-    if (getcontext(&scheduler_context) != 0)
-        BAIL("Get Context SCHEDULER");
-
-    scheduler_context.uc_stack.ss_sp = scheduler_stack;
-    scheduler_context.uc_stack.ss_size = sizeof(scheduler_stack);
-    scheduler_context.uc_link = NULL; // when the scheduler is done, everything should be done
-
-    makecontext(&scheduler_context, scheduler_worker, 0);
 }
 
 static void init_timer() {
@@ -329,7 +312,6 @@ static inline void init_lib() {
 
         // this is the first call to the library
         init_signals();
-        init_scheduler();
         init_timer();
         init_main(); // we initialize main after initializing all other lib parts to make sure that we don't execute the code twice
     }
@@ -349,7 +331,7 @@ int ult_create(ult_t* thread, voidptr_arg_voidptr_ret_func start_routine, void* 
     end_protected_zone(); // end of protected zone
 
     init_ult(thread, id, start_routine, arg);
-    init_ult_context(thread, &scheduler_context);    // when done return to the scheduler
+    init_ult_context(thread, NULL);    // when done return to the scheduler
 
     // cast wraper to a function without parameters that returns void (void (*)(void)) to avoid compiler warning if wrapper has parameters
     makecontext(&(thread->context), wrapper, 0);  // passing pointers as parameters to makecontext might not be portable, so we save the parameters in ult_data
@@ -396,9 +378,8 @@ int ult_join(ult_t* thread, void** retval) {
         current_waiting_join->waiting_to_join = thread;
         delete_ult_first(&running_ult_list); // remove the current thread from the running list
 
+        SCHEDULER(current_waiting_join); // the scheduler would set the signals back
         start_protected_zone();
-        SWAP_TO_SCHEDULER(&(current_waiting_join->context)); // the scheduler would set the signals back
-        end_protected_zone();
     }
 
     // current thread is now running after the finish of the to-be-joined thread (or the thread was already in the finished state)
@@ -437,7 +418,7 @@ void ult_sleep(uint64_t sec, uint64_t nsec) {
     current->status = SLEEPING;
 
     should_change_thread = 1;
-    SWAP_TO_SCHEDULER(&(current->context));
+    SCHEDULER(current);
 }
 
 uint64_t ult_get_id() {
@@ -451,8 +432,6 @@ void ult_exit(void* retval) {
     ult_t* current = running_ult_list.head->ult;
 
     wrapper_exit(current, retval);
-
-    SWAP_TO_SCHEDULER(&(current->context));
 }
 
 int ult_mutex_init(ult_mutex_t* mutex) {
@@ -517,9 +496,7 @@ int ult_mutex_lock(ult_mutex_t* mutex) {
 
     printf("[%lu] switched to WAITING\n", current->id); fflush(NULL);
 
-    SWAP_TO_SCHEDULER(&(current->context)); // the scheduler will reset the signals
-
-    printf("[%lu] here 2\n", current->id); fflush(NULL);
+    SCHEDULER(current); // the scheduler will reset the signals
 
     end_protected_zone();
     
