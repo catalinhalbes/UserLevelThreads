@@ -39,7 +39,7 @@ typedef struct ult_t{
 
     struct ult_t*                   joined_by;       // the thread that waits after the current thread
     struct ult_t*                   waiting_to_join; // the thread that is waited by the current thread
-    ult_mutex_t*                    waiting_mutex;   // the mutexes that is being waited
+    ult_mutex_t*                    waiting_mutex;   // the mutex that is being waited
     uint32_t                        deadlock_explore_counter;
 
     voidptr_arg_voidptr_ret_func    start_routine;
@@ -58,6 +58,8 @@ int ult_join(ult_t* thread, void** retval);
 
 void ult_sleep(uint64_t sec, uint64_t nsec);
 uint64_t ult_get_id();
+
+void ult_exit(void* retval);
 
 int ult_mutex_init(ult_mutex_t* mutex);
 int ult_mutex_destroy(ult_mutex_t* mutex);

@@ -58,6 +58,34 @@ void* print_char(void* arg) {
     return (void*)i;
 }
 
+
+void* immediate_exit3(void* arg) {
+    printf("[%lu] immediate_exit3: enter\n", ult_get_id());
+    ult_sleep(2, 0);
+    ult_exit(arg);
+    printf("[%lu] immediate_exit3: exit\n", ult_get_id());
+
+    return NULL;
+} 
+
+void* immediate_exit2(void* arg) {
+    printf("[%lu] immediate_exit2: enter\n", ult_get_id());
+    ult_sleep(2, 0);
+    immediate_exit3(arg);
+    printf("[%lu] immediate_exit2: exit\n", ult_get_id());
+
+    return NULL;
+} 
+
+void* immediate_exit(void* arg) {
+    printf("[%lu] immediate_exit: enter\n", ult_get_id());
+    ult_sleep(2, 0);
+    immediate_exit2(arg);
+    printf("[%lu] immediate_exit: exit\n", ult_get_id());
+
+    return NULL;
+} 
+
 void test1() {
     ult_mutex_t* mutexes = (ult_mutex_t*) malloc(sizeof(ult_mutex_t) * 2);
     ult_t* threads = (ult_t*) malloc(sizeof(ult_t) * 4);
@@ -86,6 +114,20 @@ void test1() {
 
     free(mutexes);
     free(threads);
+}
+
+void test2() {
+    ult_t t;
+    void* val;
+
+    ult_create(&t, immediate_exit, (void*) 0xdeadbeef);
+    ult_join(&t, &val);
+    printf("Thread returned: %p\n", val);
+
+    ult_create(&t, immediate_exit, (void*) 0xc0ffee);
+    ult_exit(NULL);
+    ult_join(&t, &val);
+    printf("Thread returned: %p\n", val);
 }
 
 //////////////// Deadlock test //////////////////
@@ -246,8 +288,9 @@ void deadlock_test2() {
 }
 
 int main() {
-    // test1();
+    test1();
+    // test2();
     // deadlock_test(4);
-    deadlock_test2();
+    // deadlock_test2();
     return 0;
 }

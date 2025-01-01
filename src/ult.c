@@ -169,15 +169,10 @@ static inline void init_ult_context(ult_t* ult, ucontext_t* link) {
     ult->context.uc_link = link;
 }
 
-void wrapper() {
-    ult_t* current = running_ult_list.head->ult;
-
-    printf("[%lu] wrapper enter\n", current->id); fflush(NULL);
-    current->result = current->start_routine(current->arg);
-    printf("[%lu] routine finished\n", current->id); fflush(NULL);
-
+static inline void wrapper_exit(ult_t* current, void* result) {
     start_protected_zone();
 
+    current->result = result;
     current->status = FINISHED;
 
     // remove the current thread from the running list
@@ -194,8 +189,17 @@ void wrapper() {
     printf("[%lu] wrapper exit\n", current->id); fflush(NULL);
 
     end_protected_zone();
+}
 
-    // automatic return to scheduler
+void wrapper() {
+    ult_t* current = running_ult_list.head->ult;
+    void* result;
+
+    printf("[%lu] wrapper enter\n", current->id); fflush(NULL);
+    result = current->start_routine(current->arg);
+    printf("[%lu] routine finished\n", current->id); fflush(NULL);
+
+    wrapper_exit(current, result);
 }
 
 void scheduler_worker() {
@@ -439,6 +443,16 @@ void ult_sleep(uint64_t sec, uint64_t nsec) {
 uint64_t ult_get_id() {
     init_lib();
     return running_ult_list.head->ult->id;
+}
+
+void ult_exit(void* retval) {
+    init_lib();
+
+    ult_t* current = running_ult_list.head->ult;
+
+    wrapper_exit(current, retval);
+
+    SWAP_TO_SCHEDULER(&(current->context));
 }
 
 int ult_mutex_init(ult_mutex_t* mutex) {
