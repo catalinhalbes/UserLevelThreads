@@ -22,6 +22,7 @@ static ult_t main_ult;
 static ult_linked_list_t running_ult_list, not_finished_ults;
 static volatile uint64_t ult_counter = 0;
 static volatile uint64_t mutex_counter = 0;
+static volatile uint64_t cond_counter = 0;
 static uint32_t deadlock_counter = 0; // this value combined with the explore counter in the ult structure will indicate if a node in the lock graph was already explored in the current stage
                                       // we don't care about overflows, by this reason this variable could have been byte sized, but for alignment reasons the structure will use a 32bit unsigned
 
@@ -459,6 +460,8 @@ int ult_mutex_destroy(ult_mutex_t* mutex) {
         return 1;
     }
 
+    destroy_ult_list(mutex->waiting);
+
     end_protected_zone();
 
     return 0;
@@ -494,7 +497,7 @@ int ult_mutex_lock(ult_mutex_t* mutex) {
     current->waiting_mutex = mutex;
     delete_ult_first(&running_ult_list);
 
-    printf("[%lu] switched to WAITING\n", current->id); fflush(NULL);
+    printf("[%lu] switched to WAITING at mutex %lu\n", current->id, mutex->id); fflush(NULL);
 
     SCHEDULER(current); // the scheduler will reset the signals
 
@@ -533,5 +536,99 @@ int ult_mutex_unlock(ult_mutex_t* mutex) {
 
     end_protected_zone();
     
+    return 0;
+}
+
+int ult_cond_init(ult_cond_t* cond) {
+    init_lib();
+
+    start_protected_zone();
+        cond_counter += 1;
+        uint64_t id = cond_counter;
+    end_protected_zone();
+
+    cond->id = id;
+    init_ult_linked_list(&(cond->waiting));
+
+    return 0;
+}
+
+int ult_cond_destroy(ult_cond_t* cond) {
+    init_lib();
+
+    start_protected_zone();
+
+    if (cond->waiting.size != 0) {
+        end_protected_zone();
+        return 1;
+    }
+
+    destroy_ult_list(cond->waiting);
+
+    end_protected_zone();
+
+    return 0;
+}
+
+int ult_cond_wait(ult_cond_t* cond, ult_mutex_t* mutex) {
+    init_lib();
+
+    start_protected_zone();
+
+    ult_mutex_unlock(mutex);
+
+    ult_t* current = running_ult_list.head->ult;
+    insert_ult_last(&(cond->waiting), current);
+    current->status = WAITING;
+    current->waiting_cond = cond;
+    delete_ult_first(&running_ult_list);
+
+    printf("[%lu] switched to WAITING at cond var %lu\n", current->id, cond->id); fflush(NULL);
+
+    SCHEDULER(current);
+
+    ult_mutex_lock(mutex);
+
+    end_protected_zone();
+
+    return 0;
+}
+
+int ult_cond_signal(ult_cond_t* cond) {
+    init_lib();
+
+    start_protected_zone();
+
+    if (cond->waiting.size == 0) {
+        end_protected_zone();
+        return 1;
+    }
+
+    ult_t* ult_to_start = cond->waiting.head->ult;
+    delete_ult_first(&(cond->waiting));
+    ult_to_start->status = RUNNING;
+    ult_to_start->waiting_cond = NULL;
+    insert_ult_last(&running_ult_list, ult_to_start);
+
+    end_protected_zone();
+
+    return 0;
+}
+
+int ult_cond_broadcast(ult_cond_t* cond) {
+    init_lib();
+
+    start_protected_zone();
+
+    while (cond->waiting.size != 0) {
+        ult_t* ult_to_start = cond->waiting.head->ult;
+        delete_ult_first(&(cond->waiting));
+        ult_to_start->status = RUNNING;
+        ult_to_start->waiting_cond = NULL;
+        insert_ult_last(&running_ult_list, ult_to_start);
+    }
+
+    end_protected_zone();
+
     return 0;
 }

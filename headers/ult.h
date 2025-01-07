@@ -34,12 +34,13 @@ typedef struct ult_t{
     void*                           result;
     void*                           arg;
 
-    struct timespec sleep_time;
-    uint64_t sleep_amount_nsec;
+    struct timespec                 sleep_time;
+    uint64_t                        sleep_amount_nsec;
 
     struct ult_t*                   joined_by;       // the thread that waits after the current thread
     struct ult_t*                   waiting_to_join; // the thread that is waited by the current thread
     ult_mutex_t*                    waiting_mutex;   // the mutex that is being waited
+    ult_cond_t*                     waiting_cond;    // the condition wariable that is being waited
     uint32_t                        deadlock_explore_counter;
 
     voidptr_arg_voidptr_ret_func    start_routine;
@@ -53,6 +54,11 @@ typedef struct ult_mutex_t {
     ult_linked_list_t   waiting;
 } ult_mutex_t;
 
+typedef struct ult_cond_t {
+    uint64_t            id;
+    ult_linked_list_t   waiting;
+}ult_cond_t;
+
 int ult_create(ult_t* thread, voidptr_arg_voidptr_ret_func start_routine, void* arg);
 int ult_join(ult_t* thread, void** retval);
 
@@ -65,5 +71,12 @@ int ult_mutex_init(ult_mutex_t* mutex);
 int ult_mutex_destroy(ult_mutex_t* mutex);
 int ult_mutex_lock(ult_mutex_t* mutex);
 int ult_mutex_unlock(ult_mutex_t* mutex);
+
+int ult_cond_init(ult_cond_t* cond);
+int ult_cond_destroy(ult_cond_t* cond);
+int ult_cond_wait(ult_cond_t* cond, ult_mutex_t* mutex);
+int ult_cond_signal(ult_cond_t* cond);
+int ult_cond_broadcast(ult_cond_t* cond);
+// int ult_cond_timewait(ult_cond_t* cond, ult_mutex_t* mutex, uint64_t sec, uint64_t nsec);
 
 #endif // ULT_H
