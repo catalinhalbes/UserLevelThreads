@@ -460,7 +460,7 @@ int ult_mutex_destroy(ult_mutex_t* mutex) {
         return 1;
     }
 
-    destroy_ult_list(mutex->waiting);
+    destroy_ult_list(&(mutex->waiting));
 
     end_protected_zone();
 
@@ -563,7 +563,7 @@ int ult_cond_destroy(ult_cond_t* cond) {
         return 1;
     }
 
-    destroy_ult_list(cond->waiting);
+    destroy_ult_list(&(cond->waiting));
 
     end_protected_zone();
 

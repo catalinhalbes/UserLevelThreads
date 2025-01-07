@@ -286,10 +286,147 @@ void deadlock_test2() {
     ult_join(&deadlock_main, NULL);
 }
 
+
+//////////////// Producer-Consumer ///////////////////
+
+typedef struct prod_cons_arg {
+    generic_linked_list_t list;
+    ult_mutex_t mutex;
+    ult_cond_t  prod_cond;
+    ult_cond_t  cons_cond;
+    int running_producers;
+    int running_consumers;
+} prod_cons_arg;
+
+void* producer(void* args) {
+    prod_cons_arg* arg = (prod_cons_arg*) args;
+    uint64_t id = ult_get_id();
+
+    const int to_add = 10;
+
+    ult_mutex_lock(&(arg->mutex));
+    arg->running_producers += 1;
+    ult_mutex_unlock(&(arg->mutex));
+
+    for (uint64_t i = id * to_add; i < (id + 1) * to_add; i++) {
+        ult_mutex_lock(&(arg->mutex));
+
+        while (arg->list.size + to_add >= to_add * 2) {
+            printf("\t\t\t\t\t\t[Producer %ld] waiting...\n", id); fflush(NULL);
+            ult_cond_wait(&(arg->prod_cond), &(arg->mutex));
+        }
+
+        printf("\t\t\t\t\t\t[Producer %ld] adding [%ld, %ld]\n", id, i * to_add + 1, i * to_add + to_add); fflush(NULL);
+
+        for (uint64_t j = 1; j <= to_add; j++) {
+            insert_last(&(arg->list), (void*) (i * to_add + j));
+        }
+
+        ult_cond_signal(&(arg->cons_cond));
+
+        ult_mutex_unlock(&(arg->mutex));
+
+        ult_sleep(1, 0);
+    }
+
+    ult_mutex_lock(&(arg->mutex));
+
+    arg->running_producers -= 1;
+    
+    if (arg->running_producers == 0) {
+        printf("\t\t\t\t\t\t[Producer %ld] sending finish signals\n", id); fflush(NULL);
+
+        for (uint64_t j = 0; j < arg->running_consumers; j++) {
+            insert_last(&(arg->list), 0);
+        }
+
+        ult_cond_broadcast(&(arg->cons_cond));
+    }
+    else {
+        printf("\t\t\t\t\t\t[Producer %ld] Exitting... There are %d producers left! \n", id, arg->running_producers); fflush(NULL);
+    }
+
+    ult_mutex_unlock(&(arg->mutex));
+
+    return NULL;
+}
+
+void* consumer(void* args) {
+    prod_cons_arg* arg = (prod_cons_arg*) args;
+    uint64_t val = 1;
+    uint64_t id = ult_get_id();
+
+    ult_mutex_lock(&(arg->mutex));
+    arg->running_consumers += 1;
+    ult_mutex_unlock(&(arg->mutex));
+
+    while (val != 0) {
+        ult_mutex_lock(&(arg->mutex));
+
+        while (arg->list.size == 0) {
+            printf("\t\t\t\t\t\t[Consumer %ld] signal producers...\n", id); fflush(NULL);
+            ult_cond_signal(&(arg->prod_cond));
+
+            printf("\t\t\t\t\t\t[Consumer %ld] waiting...\n", id); fflush(NULL);
+            ult_cond_wait(&(arg->cons_cond), &(arg->mutex));
+        }
+
+        val = (uint64_t) arg->list.head->data;
+        delete_first(&(arg->list));
+
+        if (val != 0) {
+            printf("\t\t\t\t\t\t[Consumer %ld] got: %ld\n", id, val); fflush(NULL);
+        } 
+        else {
+            arg->running_consumers -= 1;
+            printf("\t\t\t\t\t\t[Producer %ld] Exitting... There are %d consumers left! \n", id, arg->running_consumers); fflush(NULL);
+        }
+
+        ult_mutex_unlock(&(arg->mutex));
+
+        ult_sleep(0, 200000000); // 200 ms
+    }
+
+    return NULL;
+}
+
+void producer_consumer(int producers, int consumers) {
+    ult_t* threads = (ult_t*) malloc((producers + consumers) * sizeof(ult_t));
+    prod_cons_arg arg;  
+
+    arg.running_consumers = 0;
+    arg.running_producers = 0;
+
+    init_linked_list(&(arg.list));
+    ult_mutex_init(&(arg.mutex));
+    ult_cond_init(&(arg.prod_cond));
+    ult_cond_init(&(arg.cons_cond));
+
+    for (int i = 0; i < producers; i++) {
+        ult_create(&threads[i], producer, (void*) &arg);
+    }
+
+    for (int i = producers; i < producers + consumers; i++) {
+        ult_create(&threads[i], consumer, (void*) &arg);
+    }
+
+    for(int i = 0; i < producers + consumers; i++) {
+        ult_join(&threads[i], NULL);
+    }
+
+    destroy_list(&(arg.list));
+    ult_mutex_destroy(&(arg.mutex));
+    ult_cond_destroy(&(arg.prod_cond));
+    ult_cond_destroy(&(arg.cons_cond));
+
+    free(threads);
+}
+
 int main() {
     // test1();
     // test2();
     // deadlock_test(5);
-    deadlock_test2();
+    // deadlock_test2();
+    producer_consumer(3, 5);
     return 0;
 }

@@ -28,6 +28,17 @@ typedef enum {
     FINISHED
 } ult_status;
 
+typedef struct ult_mutex_t {
+    uint64_t            id;
+    ult_t*              owner;
+    ult_linked_list_t   waiting;
+} ult_mutex_t;
+
+typedef struct ult_cond_t {
+    uint64_t            id;
+    ult_linked_list_t   waiting;
+}ult_cond_t;
+
 typedef struct ult_t{
     uint64_t                        id;
     ult_status                      status;
@@ -47,17 +58,6 @@ typedef struct ult_t{
     ucontext_t                      context;
     char                            stack[DEFAULT_ULT_STACK_SIZE];
 }ult_t;
-
-typedef struct ult_mutex_t {
-    uint64_t            id;
-    ult_t*              owner;
-    ult_linked_list_t   waiting;
-} ult_mutex_t;
-
-typedef struct ult_cond_t {
-    uint64_t            id;
-    ult_linked_list_t   waiting;
-}ult_cond_t;
 
 int ult_create(ult_t* thread, voidptr_arg_voidptr_ret_func start_routine, void* arg);
 int ult_join(ult_t* thread, void** retval);
