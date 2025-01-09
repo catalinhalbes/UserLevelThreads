@@ -326,7 +326,8 @@ void* producer(void* args) {
 
         ult_mutex_unlock(&(arg->mutex));
 
-        ult_sleep(1, 0);
+        // ult_sleep(1, 0);
+        do_work(200000000);
     }
 
     ult_mutex_lock(&(arg->mutex));
@@ -384,7 +385,8 @@ void* consumer(void* args) {
 
         ult_mutex_unlock(&(arg->mutex));
 
-        ult_sleep(0, 200000000); // 200 ms
+        // ult_sleep(0, 200000000); // 200 ms
+        do_work(10000000);
     }
 
     return NULL;

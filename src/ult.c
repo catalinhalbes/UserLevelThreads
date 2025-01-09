@@ -12,7 +12,8 @@
 #include "ult.h"
 #include "linked_list.h"
 
-#define CLOCKID CLOCK_REALTIME
+#define CLOCKID CLOCK_PROCESS_CPUTIME_ID // can use CLOCK_THREAD_CPUTIME_ID, CLOCK_PROCESS_CPUTIME_ID
+#define SLEEP_CLOCK CLOCK_REALTIME
 #define TIMER_SIG SIGUSR1
 #define DEADLOCK_SIG SIGUSR2
 #define TIMER_INTERVAL_NS 1000000 //ns = 1ms
@@ -31,6 +32,12 @@ static volatile uint8_t should_change_thread = 0;
 static volatile uint8_t inside_protected_zone = 0;  // we still need to ignore signals even if we mask them, because masking will keep the signal until it is unmasked, 
                                                     // but we don't want to execute that signal immediately, because we would still be in the scheduler
 sigset_t mask_sig, no_mask;
+
+// Calling a function that creates a protected zone inside a protected zone will end all the protection zones upon returning (assuming protection zones are NOT reentrant)
+// This means that to ensure the continuity of the protection zone no other function that creates protection zones should be called inside the protection zone
+// Fixing this problem is also tricky. You can:
+//      1. Duplicate the needed code so it doesn't overwrite the protection zone (leads to code duplication, not ideal)
+//      2. Make the protection zones reentrant using a counter (leads to problems when manually calling the SCHEDULER function as it would require all protection zones to be exitted before calling)
 
 static void start_protected_zone() {
     inside_protected_zone = 1;
@@ -168,7 +175,7 @@ void SCHEDULER(ult_t* current) {
             // printf("[scheduler] %lu is sleeping\n", thread->id); fflush(NULL);
             struct timespec current_time;
 
-            if (clock_gettime(CLOCKID, &current_time) == -1) {
+            if (clock_gettime(SLEEP_CLOCK, &current_time) == -1) {
                 BAIL("Get Time");
             }
 
@@ -238,7 +245,7 @@ void sig_handler(int signum, siginfo_t *si, void *uc) {
     // printf("[handler] received %d\n", signum); fflush(NULL);
 
     if (inside_protected_zone && signum != DEADLOCK_SIG) {
-        printf("[handler] IGNORE %d\n", signum); fflush(NULL);
+        // printf("[handler] IGNORE %d\n", signum); fflush(NULL);
         return;
     }
 
@@ -411,7 +418,7 @@ void ult_sleep(uint64_t sec, uint64_t nsec) {
 
     printf("[%lu] sleep\n", current->id); fflush(NULL);
 
-    if (clock_gettime(CLOCKID, &(current->sleep_time)) == -1) {
+    if (clock_gettime(SLEEP_CLOCK, &(current->sleep_time)) == -1) {
         BAIL("Get Time");
     }
 
@@ -527,7 +534,7 @@ int ult_mutex_unlock(ult_mutex_t* mutex) {
         // pass the ownership to the next thread in the waiting list
         mutex->owner = mutex->waiting.head->ult;
         delete_ult_first(&(mutex->waiting));
-
+        printf("[%lu] Mutex Wake up %lu\n", current->id, mutex->owner->id); fflush(NULL);
         // if there is a thread waiting, WAKE IT UP!
         mutex->owner->status = RUNNING;
         mutex->owner->waiting_mutex = NULL;
@@ -575,9 +582,26 @@ int ult_cond_wait(ult_cond_t* cond, ult_mutex_t* mutex) {
 
     start_protected_zone();
 
-    ult_mutex_unlock(mutex);
+    // we cannot use ult_mutex_unlock as it would break the protection zone, 
+    // and it is needed that the mutex unocking and waiting to be done atomically
+    // ult_mutex_unlock(mutex);
 
     ult_t* current = running_ult_list.head->ult;
+
+    // unlock the mutex atomically with waiting to make sure that no signals are missed
+    if (mutex != NULL && mutex->owner != NULL && mutex->owner->id == current->id) {
+        mutex->owner = NULL;
+
+        if (mutex->waiting.size > 0) { 
+            mutex->owner = mutex->waiting.head->ult;
+            delete_ult_first(&(mutex->waiting));
+            printf("[%lu] Mutex Wake up (cond) %lu\n", current->id, mutex->owner->id); fflush(NULL);
+            mutex->owner->status = RUNNING;
+            mutex->owner->waiting_mutex = NULL;
+            insert_ult_last(&running_ult_list, mutex->owner);
+        }
+    }
+
     insert_ult_last(&(cond->waiting), current);
     current->status = WAITING;
     current->waiting_cond = cond;
