@@ -424,11 +424,58 @@ void producer_consumer(int producers, int consumers) {
     free(threads);
 }
 
+
+//////////////////////////// Producer-Consumer Deadlock ///////////////////////////////////
+
+typedef struct prod_cons_deadlock_arg {
+    ult_mutex_t m1, m2;
+    ult_cond_t cond;
+}prod_cons_deadlock_arg;
+
+void* prod_cond_deadlock_worker(void* args) {
+    prod_cons_deadlock_arg* arg = (prod_cons_deadlock_arg*) args;
+
+    printf("[%lu] wait m1\n", ult_get_id());
+    ult_mutex_lock(&(arg->m1));
+    printf("[%lu] wait m2\n", ult_get_id());
+    ult_mutex_lock(&(arg->m2));
+    while(1) {
+        printf("[%lu] wait signal\n", ult_get_id());
+        ult_cond_wait(&(arg->cond), &(arg->m2));
+    }
+    ult_mutex_unlock(&(arg->m2));
+    ult_mutex_unlock(&(arg->m1));
+
+    return NULL;
+}
+
+void prod_cons_deadlock() {
+    prod_cons_deadlock_arg arg;
+    ult_mutex_init(&(arg.m1));
+    ult_mutex_init(&(arg.m2));
+    ult_cond_init(&(arg.cond));
+
+    ult_t t[2];
+
+    for (int i = 0; i < 2; i++) {
+        ult_create(&t[i], prod_cond_deadlock_worker, (void*) &arg);
+    }
+
+    for(int i = 0; i < 2; i++) {
+        ult_join(&t[i], NULL);
+    }
+
+    ult_mutex_destroy(&(arg.m1));
+    ult_mutex_destroy(&(arg.m2));
+    ult_cond_destroy(&(arg.cond));
+}
+
 int main() {
     // test1();
     // test2();
     // deadlock_test(5);
     // deadlock_test2();
-    producer_consumer(3, 5);
+    // producer_consumer(3, 5);
+    prod_cons_deadlock();
     return 0;
 }

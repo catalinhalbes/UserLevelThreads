@@ -49,6 +49,9 @@ static void end_protected_zone() {
     inside_protected_zone = 0;
 }
 
+// TODO: what happens if a thread finished without releasing resources? 
+//       It would be a deadlock situation, but not ciclycal!
+//       worst part: if the thread is joined it can also be freed
 void find_deadlocks() {
     start_protected_zone();
 
@@ -108,7 +111,9 @@ void find_deadlocks() {
             insert_ult_last(&path, current);
             insert_ult_first(&explore_stack, NULL);
 
-            ult_t* next_candidate = current->waiting_to_join;
+            ult_t* next_candidate = NULL;
+
+            next_candidate = current->waiting_to_join;
             if (next_candidate != NULL) {
                 insert_ult_first(&explore_stack, next_candidate);
             }
@@ -116,6 +121,22 @@ void find_deadlocks() {
             if (current->waiting_mutex != NULL) {
                 next_candidate = current->waiting_mutex->owner;
                 insert_ult_first(&explore_stack, next_candidate);
+            }
+
+            if (current->waiting_cond != NULL) {
+                // the thread is waiting a condition
+                // any thread that is not waiting the same condition is a potential signaler
+                ult_node_t* aux = not_finished_ults.head;
+                while(aux != NULL) {
+                    ult_t* c = aux->ult;
+
+                    if (c->waiting_cond == NULL || c->waiting_cond->id != current->waiting_cond->id) {
+                        // not waiting the same cond
+                        insert_ult_first(&explore_stack, c);
+                    }
+                    
+                    aux = aux->next;
+                }
             }
         }
         candidate = candidate->next;
