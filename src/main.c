@@ -322,12 +322,12 @@ void* producer(void* args) {
             insert_last(&(arg->list), (void*) (i * to_add + j));
         }
 
-        ult_cond_signal(&(arg->cons_cond));
+        ult_cond_broadcast(&(arg->cons_cond));
 
         ult_mutex_unlock(&(arg->mutex));
 
         // ult_sleep(1, 0);
-        do_work(200000000);
+        // do_work(200000000);
     }
 
     ult_mutex_lock(&(arg->mutex));
@@ -386,7 +386,7 @@ void* consumer(void* args) {
         ult_mutex_unlock(&(arg->mutex));
 
         // ult_sleep(0, 200000000); // 200 ms
-        do_work(10000000);
+        // do_work(10000000);
     }
 
     return NULL;
@@ -422,8 +422,9 @@ void producer_consumer(int producers, int consumers) {
     ult_cond_destroy(&(arg.cons_cond));
 
     free(threads);
-}
 
+    printf("Done!!!\n"); fflush(NULL);
+}
 
 //////////////////////////// Producer-Consumer Deadlock ///////////////////////////////////
 
@@ -475,7 +476,7 @@ int main() {
     // test2();
     // deadlock_test(5);
     // deadlock_test2();
-    // producer_consumer(3, 5);
-    prod_cons_deadlock();
+    producer_consumer(3, 5);
+    // prod_cons_deadlock();
     return 0;
 }

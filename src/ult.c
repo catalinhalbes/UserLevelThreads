@@ -263,7 +263,7 @@ void wrapper() {
 }
 
 void sig_handler(int signum, siginfo_t *si, void *uc) {
-    // printf("[handler] received %d\n", signum); fflush(NULL);
+    // printf("[handler %lu] received %d, protect: %s\n", running_ult_list.head->ult->id, signum, inside_protected_zone? "true": "false"); fflush(NULL);
 
     if (inside_protected_zone && signum != DEADLOCK_SIG) {
         // printf("[handler] IGNORE %d\n", signum); fflush(NULL);
