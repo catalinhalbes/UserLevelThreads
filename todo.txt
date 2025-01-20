@@ -1,3 +1,0 @@
-- cond example
-- deadlock detection example
-kill -SIGUSR2 `pgrep -x ULT | head -n 1`
